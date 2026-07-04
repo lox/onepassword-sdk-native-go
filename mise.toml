@@ -1,0 +1,29 @@
+[tools]
+go = "1.24.0"
+
+[tasks.test]
+run = "go test ./..."
+
+[tasks.test-native]
+run = "go test -tags onepassword_native ./..."
+
+[tasks.vet]
+run = "go vet ./..."
+
+[tasks.audit-native-module-graph]
+run = "scripts/audit-native-module-graph.sh"
+
+[tasks.check-native-small-cli]
+run = "scripts/check-native-small-cli.sh"
+
+[tasks.check-native-keyring-provider]
+run = "scripts/check-native-keyring-provider.sh"
+
+[tasks.check-native-keyring-live]
+run = "scripts/check-native-keyring-live.sh"
+
+[tasks.ci]
+depends = ["test", "test-native", "vet", "audit-native-module-graph", "check-native-small-cli", "check-native-keyring-live"]
+
+[tasks.check]
+depends = ["ci", "check-native-keyring-provider"]
