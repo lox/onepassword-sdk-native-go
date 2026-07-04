@@ -1,5 +1,9 @@
 # Unofficial Native 1Password Go SDK
 
+[![Unofficial native SDK](https://img.shields.io/badge/unofficial%20native%20SDK-lox%2Fonepassword--sdk--native--go-007d9c)](https://github.com/lox/onepassword-sdk-native-go)
+[![CI](https://github.com/lox/onepassword-sdk-native-go/actions/workflows/validate.yml/badge.svg?branch=main)](https://github.com/lox/onepassword-sdk-native-go/actions/workflows/validate.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/lox/onepassword-sdk-native-go.svg)](https://pkg.go.dev/github.com/lox/onepassword-sdk-native-go)
+
 This is an unofficial native Go SDK for a small 1Password integration surface. It is not published or supported by 1Password.
 
 The package name is `onepassword` and the module path is:
