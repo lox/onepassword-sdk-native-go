@@ -6,7 +6,12 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 )
+
+// nativeHTTPTimeout bounds every native API request; without it a blackholed
+// connection blocks the per-client mutex and deadlocks all other calls.
+const nativeHTTPTimeout = 60 * time.Second
 
 type nativeClient struct {
 	mu         sync.Mutex
@@ -16,6 +21,10 @@ type nativeClient struct {
 	baseURL    *url.URL
 	httpClient *http.Client
 	session    *nativeSession
+	// Decrypted key material memoized for the lifetime of the session;
+	// cleared by invalidateSession.
+	keysetCache   map[string]nativeSymmetricKey
+	vaultKeyCache map[string]map[int]nativeSymmetricKey
 }
 
 type nativeSession struct {
@@ -110,9 +119,9 @@ func nativeAllowedAccountHost(host string) bool {
 func nativeDefaultHTTPClient() *http.Client {
 	transport, ok := http.DefaultTransport.(*http.Transport)
 	if !ok {
-		return http.DefaultClient
+		return &http.Client{Timeout: nativeHTTPTimeout}
 	}
 	cloned := transport.Clone()
 	cloned.DisableCompression = true
-	return &http.Client{Transport: cloned}
+	return &http.Client{Transport: cloned, Timeout: nativeHTTPTimeout}
 }

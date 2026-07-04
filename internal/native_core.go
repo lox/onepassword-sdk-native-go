@@ -34,7 +34,7 @@ func (c *NativeCore) InitClient(ctx context.Context, config []byte) ([]byte, err
 		return nil, err
 	}
 	if clientConfig.AccountName == nil && clientConfig.SAToken == "" {
-		return nil, fmt.Errorf(`{"name":"InvalidUserInput","message":"invalid user input: encountered the following errors: service account token was not specified"}`)
+		return nil, nativeError("InvalidUserInput", "invalid user input: encountered the following errors: service account token was not specified")
 	}
 	creds, err := parseServiceAccountToken(clientConfig.SAToken)
 	if clientConfig.AccountName == nil && err != nil {
@@ -78,7 +78,7 @@ func (c *NativeCore) invokeNative(ctx context.Context, invocation InvokeConfig) 
 		if err != nil {
 			return nil, true, nativeError("InvalidUserInput", err.Error())
 		}
-		if err := validateSecretReference(ref); err != nil {
+		if err := ValidateSecretReference(ref); err != nil {
 			return nil, true, nativeError("Validation", err.Error())
 		}
 		return []byte("null"), true, nil
@@ -113,7 +113,7 @@ func (c *NativeCore) client(id uint64) (*nativeClient, error) {
 	c.mu.Unlock()
 
 	if client == nil {
-		return nil, fmt.Errorf(`{"name":"Internal","message":"invalid client id"}`)
+		return nil, nativeError("Internal", "invalid client id")
 	}
 	return client, nil
 }
@@ -122,28 +122,35 @@ func unsupportedNativeMethodError(method string) error {
 	return nativeError("UnsupportedNativeMethod", fmt.Sprintf("native core does not implement %q", method))
 }
 
-func nativeError(name, message string) error {
+// coreError is a categorized error that crosses the core boundary as a JSON
+// {name,message} envelope but keeps its identity in-process so callers can
+// classify it with errors.As instead of re-parsing Error() output.
+type coreError struct {
+	Name    string
+	Message string
+}
+
+func (e *coreError) Error() string {
 	payload, err := json.Marshal(struct {
 		Name    string `json:"name"`
 		Message string `json:"message"`
-	}{Name: name, Message: message})
+	}{Name: e.Name, Message: e.Message})
 	if err != nil {
-		return err
+		return e.Message
 	}
-	return fmt.Errorf("%s", payload)
+	return string(payload)
+}
+
+func nativeError(name, message string) error {
+	return &coreError{Name: name, Message: message}
 }
 
 func nativeErrorName(err error) string {
-	if err == nil {
-		return ""
+	var core *coreError
+	if errors.As(err, &core) {
+		return core.Name
 	}
-	var payload struct {
-		Name string `json:"name"`
-	}
-	if json.Unmarshal([]byte(err.Error()), &payload) != nil {
-		return ""
-	}
-	return payload.Name
+	return ""
 }
 
 func stringParam(params map[string]interface{}, name string) (string, error) {
@@ -158,7 +165,7 @@ func stringParam(params map[string]interface{}, name string) (string, error) {
 	return s, nil
 }
 
-func validateSecretReference(secretReference string) error {
+func ValidateSecretReference(secretReference string) error {
 	body, ok := strings.CutPrefix(secretReference, "op://")
 	if !ok {
 		return errors.New("secret reference is not prefixed with \"op://\"")
@@ -246,7 +253,7 @@ func generatePIN(params map[string]interface{}) (string, error) {
 	if length == 0 {
 		return "", errors.New("password length must be greater than zero")
 	}
-	return randomString("0123456789", int(length))
+	return RandomString("0123456789", int(length))
 }
 
 func generateRandomPassword(params map[string]interface{}) (string, error) {
@@ -265,6 +272,13 @@ func generateRandomPassword(params map[string]interface{}) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return RandomPassword(length, includeDigits, includeSymbols)
+}
+
+func RandomPassword(length uint32, includeDigits, includeSymbols bool) (string, error) {
+	if length == 0 {
+		return "", errors.New("password length must be greater than zero")
+	}
 
 	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 	const digits = "0123456789"
@@ -274,7 +288,7 @@ func generateRandomPassword(params map[string]interface{}) (string, error) {
 	required := []byte{}
 	if includeDigits {
 		charset += digits
-		digit, err := randomByte(digits)
+		digit, err := RandomByte(digits)
 		if err != nil {
 			return "", err
 		}
@@ -282,7 +296,7 @@ func generateRandomPassword(params map[string]interface{}) (string, error) {
 	}
 	if includeSymbols {
 		charset += symbols
-		symbol, err := randomByte(symbols)
+		symbol, err := RandomByte(symbols)
 		if err != nil {
 			return "", err
 		}
@@ -292,12 +306,12 @@ func generateRandomPassword(params map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("password length must be at least %d", len(required))
 	}
 
-	rest, err := randomString(charset, int(length)-len(required))
+	rest, err := RandomString(charset, int(length)-len(required))
 	if err != nil {
 		return "", err
 	}
 	password := append(required, []byte(rest)...)
-	if err := shuffleBytes(password); err != nil {
+	if err := ShuffleBytes(password); err != nil {
 		return "", err
 	}
 	return string(password), nil
@@ -338,13 +352,13 @@ func boolParam(params map[string]interface{}, name string) (bool, error) {
 	return b, nil
 }
 
-func randomString(charset string, length int) (string, error) {
+func RandomString(charset string, length int) (string, error) {
 	if length == 0 {
 		return "", nil
 	}
 	buf := make([]byte, length)
 	for i := range buf {
-		b, err := randomByte(charset)
+		b, err := RandomByte(charset)
 		if err != nil {
 			return "", err
 		}
@@ -353,7 +367,7 @@ func randomString(charset string, length int) (string, error) {
 	return string(buf), nil
 }
 
-func randomByte(charset string) (byte, error) {
+func RandomByte(charset string) (byte, error) {
 	n, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
 	if err != nil {
 		return 0, err
@@ -361,7 +375,7 @@ func randomByte(charset string) (byte, error) {
 	return charset[n.Int64()], nil
 }
 
-func shuffleBytes(b []byte) error {
+func ShuffleBytes(b []byte) error {
 	for i := len(b) - 1; i > 0; i-- {
 		j, err := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
 		if err != nil {

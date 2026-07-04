@@ -262,45 +262,16 @@ func TestNativeCoreItemMethodsReachAuthBoundary(t *testing.T) {
 
 func TestNativeCoreItemReadDispatchPreservesProviderFields(t *testing.T) {
 	sessionKey := []byte("12345678901234567890123456789012")
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var plaintext string
-		switch r.URL.String() {
-		case "/api/v1/vault/abcdefghijklmnopqrstuvwx12/items/overviews":
-			plaintext = `[{
-				"id":"abcdefghijklmnopqrstuvwx34",
-				"title":"keyring",
-				"category":"API_CREDENTIAL",
-				"vaultId":"abcdefghijklmnopqrstuvwx12",
-				"tags":["keyring-1password"],
-				"createdAt":"2026-07-04T00:00:00Z",
-				"updatedAt":"2026-07-04T01:00:00Z",
-				"state":"active"
-			}]`
-		case "/api/v1/vault/abcdefghijklmnopqrstuvwx12/item/abcdefghijklmnopqrstuvwx34":
-			plaintext = `{
-				"id":"abcdefghijklmnopqrstuvwx34",
-				"title":"keyring",
-				"category":"API_CREDENTIAL",
-				"vaultId":"abcdefghijklmnopqrstuvwx12",
-				"fields":[
-					{"id":"username","title":"username","fieldType":"Text","value":"provider-key"},
-					{"id":"credential","title":"credential","fieldType":"Concealed","value":"dmFsdWU="}
-				],
-				"tags":["keyring-1password"],
-				"createdAt":"2026-07-04T00:00:00Z",
-				"updatedAt":"2026-07-04T01:00:00Z"
-			}`
-		default:
-			t.Fatalf("unexpected path %q", r.URL.String())
-		}
-		response, err := nativeSealSessionPayload("session-id", sessionKey, []byte("123456789012"), []byte(plaintext))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := json.NewEncoder(w).Encode(response); err != nil {
-			t.Fatal(err)
-		}
-	}))
+	muk := []byte("abcdefghijklmnopqrstuvwx12345678")
+	keysetID := "abcdefghijklmnopqrstuvwx90"
+	keysetKey := []byte("23456789012345678901234567890123")
+	vaultID := "abcdefghijklmnopqrstuvwx12"
+	vaultKey := []byte("34567890123456789012345678901234")
+	item := nativeSecretTestEncryptedItemJSON(t, vaultID, vaultKey)
+	server := nativeEncryptedItemServer(t, sessionKey, muk, keysetID, keysetKey, vaultID, vaultKey, map[string][]byte{
+		"/api/v1/vault/abcdefghijklmnopqrstuvwx12/items/overviews":                 []byte(`[` + string(item) + `]`),
+		"/api/v1/vault/abcdefghijklmnopqrstuvwx12/item/abcdefghijklmnopqrstuvwx34": item,
+	})
 	defer server.Close()
 
 	core := GetNativeCore()
@@ -319,6 +290,7 @@ func TestNativeCoreItemReadDispatchPreservesProviderFields(t *testing.T) {
 	client.baseURL = nativeHTTPTestClient(t, server, sessionKey).baseURL
 	client.httpClient = server.Client()
 	client.session = &nativeSession{ID: "session-id", Key: sessionKey}
+	client.keys = serviceAccountKeyMaterial{MUK: muk}
 
 	listResponse, err := core.Invoke(context.Background(), InvokeConfig{
 		Invocation: Invocation{

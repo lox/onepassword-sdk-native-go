@@ -795,13 +795,6 @@ func nativeItemPath(vaultID, itemID string) string {
 }
 
 func (c *nativeClient) decodeItemOverviews(ctx context.Context, vaultID string, raw json.RawMessage) ([]nativeItemOverview, error) {
-	var plain []nativeItemOverview
-	if err := json.Unmarshal(raw, &plain); err == nil {
-		if len(plain) == 0 || plain[0].ID != "" {
-			return plain, nil
-		}
-	}
-
 	encryptedItems, err := nativeEncryptedItems(raw)
 	if err != nil {
 		return nil, err
@@ -822,12 +815,6 @@ func (c *nativeClient) decodeItemOverviews(ctx context.Context, vaultID string, 
 }
 
 func (c *nativeClient) decodeItem(ctx context.Context, vaultID string, raw json.RawMessage) (nativeItemResponse, error) {
-	var plain nativeItemResponse
-	if err := json.Unmarshal(raw, &plain); err == nil && plain.ID != "" {
-		plain.Category = nativeItemCategory(plain.Category)
-		return plain, nil
-	}
-
 	var wrapped nativeEncryptedItemDetailsResponse
 	if err := json.Unmarshal(raw, &wrapped); err != nil || wrapped.Item.UUID == "" {
 		var encrypted nativeEncryptedItemData
@@ -1172,14 +1159,11 @@ func nativeItemVersion(raw json.RawMessage) uint32 {
 
 func randomNativeObjectID() (string, error) {
 	const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	var b [26]byte
-	if _, err := io.ReadFull(rand.Reader, b[:]); err != nil {
+	id, err := RandomString(alphabet, 26)
+	if err != nil {
 		return "", fmt.Errorf("generate item id: %w", err)
 	}
-	for i, value := range b {
-		b[i] = alphabet[int(value)%len(alphabet)]
-	}
-	return string(b[:]), nil
+	return id, nil
 }
 
 func (c *nativeClient) deleteItem(ctx context.Context, request nativeVaultItemParams) ([]byte, error) {

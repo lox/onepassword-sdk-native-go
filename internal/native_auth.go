@@ -284,6 +284,14 @@ func (r nativeAuthStartResponse) generatedSRPAuthRequest() (nativeAuthRequest, *
 	return request, ephemeralPrivate, nil
 }
 
+func (c *nativeClient) invalidateSession() {
+	c.mu.Lock()
+	c.session = nil
+	c.keysetCache = nil
+	c.vaultKeyCache = nil
+	c.mu.Unlock()
+}
+
 func (c *nativeClient) ensureSession(ctx context.Context) error {
 	if c.session != nil {
 		return nil
