@@ -803,6 +803,21 @@ func (c *nativeClient) decodeItemOverviews(ctx context.Context, vaultID string, 
 	if err != nil {
 		return nil, err
 	}
+	items, err := nativeDecryptItemOverviews(encryptedItems, vaultID, vaultKeys)
+	if err == nil {
+		return items, nil
+	}
+	if !isNativeVaultKeyNotFound(err) {
+		return nil, err
+	}
+	vaultKeys, err = c.refreshUnlockedVaultKeys(ctx, vaultID)
+	if err != nil {
+		return nil, err
+	}
+	return nativeDecryptItemOverviews(encryptedItems, vaultID, vaultKeys)
+}
+
+func nativeDecryptItemOverviews(encryptedItems []nativeEncryptedItemData, vaultID string, vaultKeys map[int]nativeSymmetricKey) ([]nativeItemOverview, error) {
 	items := make([]nativeItemOverview, 0, len(encryptedItems))
 	for _, encrypted := range encryptedItems {
 		overview, err := encrypted.decryptOverview(vaultID, vaultKeys)
@@ -824,6 +839,17 @@ func (c *nativeClient) decodeItem(ctx context.Context, vaultID string, raw json.
 		wrapped.Item = encrypted
 	}
 	vaultKeys, err := c.unlockedVaultKeys(ctx, vaultID)
+	if err != nil {
+		return nativeItemResponse{}, err
+	}
+	item, err := wrapped.Item.decryptItem(vaultID, vaultKeys)
+	if err == nil {
+		return item, nil
+	}
+	if !isNativeVaultKeyNotFound(err) {
+		return nativeItemResponse{}, err
+	}
+	vaultKeys, err = c.refreshUnlockedVaultKeys(ctx, vaultID)
 	if err != nil {
 		return nativeItemResponse{}, err
 	}
@@ -898,14 +924,37 @@ func nativeVaultKeyForItem(item nativeEncryptedItemData, vaultKeys map[int]nativ
 		if key, ok := vaultKeys[item.VaultKeySN]; ok {
 			return key, nil
 		}
-		return nativeSymmetricKey{}, fmt.Errorf("vault key serial %d was not found", item.VaultKeySN)
+		return nativeSymmetricKey{}, nativeVaultKeyNotFoundError{message: fmt.Sprintf("vault key serial %d was not found", item.VaultKeySN)}
 	}
 	for _, key := range vaultKeys {
 		if key.ID == item.EncryptedBy || key.ID == item.EncOverview.KeyID || key.ID == item.EncDetails.KeyID {
 			return key, nil
 		}
 	}
-	return nativeSymmetricKey{}, fmt.Errorf("vault key for encrypted item %q was not found", item.UUID)
+	return nativeSymmetricKey{}, nativeVaultKeyNotFoundError{message: fmt.Sprintf("vault key for encrypted item %q was not found", item.UUID)}
+}
+
+type nativeVaultKeyNotFoundError struct {
+	message string
+}
+
+func (e nativeVaultKeyNotFoundError) Error() string {
+	return e.message
+}
+
+func isNativeVaultKeyNotFound(err error) bool {
+	var target nativeVaultKeyNotFoundError
+	return errors.As(err, &target)
+}
+
+func (c *nativeClient) refreshUnlockedVaultKeys(ctx context.Context, vaultID string) (map[int]nativeSymmetricKey, error) {
+	c.mu.Lock()
+	c.keysetCache = nil
+	if c.vaultKeyCache != nil {
+		delete(c.vaultKeyCache, vaultID)
+	}
+	c.mu.Unlock()
+	return c.unlockedVaultKeys(ctx, vaultID)
 }
 
 func nativeItemStateFromTrashed(trashed string) string {

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sync/atomic"
 	"testing"
 )
 
@@ -475,6 +476,99 @@ func TestNativeListItemsDecryptsEncryptedOverviews(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Title != "keyring" || got[0].Category != "ApiCredentials" {
 		t.Fatalf("unexpected overviews: %+v", got)
+	}
+}
+
+func TestNativeListItemsRefreshesStaleVaultKeyCache(t *testing.T) {
+	sessionKey := []byte("12345678901234567890123456789012")
+	muk := []byte("abcdefghijklmnopqrstuvwx12345678")
+	keysetID := "abcdefghijklmnopqrstuvwx34"
+	keysetKey := []byte("23456789012345678901234567890123")
+	vaultID := "abcdefghijklmnopqrstuvwx12"
+	oldVaultKey := []byte("34567890123456789012345678901234")
+	newVaultKey := []byte("45678901234567890123456789012345")
+
+	var encrypted nativeEncryptedItemData
+	if err := json.Unmarshal(nativeTestEncryptedItemJSON(t, vaultID, newVaultKey, false), &encrypted); err != nil {
+		t.Fatal(err)
+	}
+	encrypted.VaultKeySN = 2
+	encryptedItem, err := json.Marshal(encrypted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accessRecord, err := json.Marshal(nativeVaultAccessRecord{
+		VaultUUID:    vaultID,
+		AccessorType: "user",
+		AccessorUUID: keysetID,
+		VaultKeySN:   2,
+		EncryptedBy:  keysetID,
+		EncVaultKey:  nativeTestEncryptedJWK(t, keysetID, keysetKey, []byte("234567890123"), nativeTestSymmetricJWK(t, vaultID, newVaultKey)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var keysetRequests int32
+	var combinedAccessRequests int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.Method, http.MethodGet; got != want {
+			t.Fatalf("got method %q, want %q", got, want)
+		}
+		if r.Header.Get("X-AgileBits-Session-ID") != "session-id" {
+			t.Fatal("missing session header")
+		}
+		var plaintext []byte
+		switch r.URL.String() {
+		case "/api/v2/account/keysets":
+			atomic.AddInt32(&keysetRequests, 1)
+			plaintext = []byte(`{"keysets":[` + string(nativeTestKeysetJSON(t, keysetID, "mp", muk, keysetKey)) + `]}`)
+		case "/api/v1/vault/" + vaultID + "/items/overviews":
+			plaintext = []byte(`[` + string(encryptedItem) + `]`)
+		case "/api/v1/objects/" + vaultID + "/access/combined":
+			atomic.AddInt32(&combinedAccessRequests, 1)
+			plaintext = []byte(`{"access":[` + string(accessRecord) + `]}`)
+		default:
+			t.Fatalf("unexpected path %q", r.URL.String())
+		}
+		response, err := nativeSealSessionPayload("session-id", sessionKey, []byte("123456789012"), plaintext)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			t.Fatal(err)
+		}
+	}))
+	defer server.Close()
+
+	client := nativeHTTPTestClient(t, server, sessionKey)
+	client.keys = serviceAccountKeyMaterial{MUK: muk}
+	client.keysetCache = map[string]nativeSymmetricKey{
+		keysetID: {ID: keysetID, Key: keysetKey},
+	}
+	client.vaultKeyCache = map[string]map[int]nativeSymmetricKey{
+		vaultID: {
+			1: {ID: vaultID, Key: oldVaultKey},
+		},
+	}
+	response, err := client.listItems(context.Background(), nativeItemsListParams{
+		VaultID: vaultID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []nativeItemOverview
+	if err := json.Unmarshal(response, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Title != "keyring" || got[0].Category != "ApiCredentials" {
+		t.Fatalf("unexpected overviews: %+v", got)
+	}
+	if got := atomic.LoadInt32(&keysetRequests); got != 1 {
+		t.Fatalf("got %d keyset requests, want 1", got)
+	}
+	if got := atomic.LoadInt32(&combinedAccessRequests); got != 1 {
+		t.Fatalf("got %d combined-access requests, want 1", got)
 	}
 }
 
