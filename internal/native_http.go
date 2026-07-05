@@ -134,6 +134,20 @@ func nativeRequestMAC(sessionID, method string, requestURL *url.URL, requestID u
 }
 
 func (c *nativeClient) doNativeJSON(ctx context.Context, method, requestPath string, requestBody, responseBody interface{}) error {
+	hadSession := c.session != nil
+	err := c.doNativeJSONOnce(ctx, method, requestPath, requestBody, responseBody)
+	if err == nil || !hadSession || nativeErrorName(err) != "Unauthenticated" {
+		return err
+	}
+	// The server-side session expired; drop it, re-authenticate, and retry once.
+	c.invalidateSession()
+	if err := c.ensureSession(ctx); err != nil {
+		return err
+	}
+	return c.doNativeJSONOnce(ctx, method, requestPath, requestBody, responseBody)
+}
+
+func (c *nativeClient) doNativeJSONOnce(ctx context.Context, method, requestPath string, requestBody, responseBody interface{}) error {
 	req, err := c.nativeJSONRequest(ctx, method, requestPath, requestBody)
 	if err != nil {
 		return err

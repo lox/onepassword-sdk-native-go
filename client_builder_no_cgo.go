@@ -1,4 +1,4 @@
-//go:build !cgo && (darwin || linux)
+//go:build !cgo && !windows
 
 package onepassword
 

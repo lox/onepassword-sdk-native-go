@@ -268,3 +268,48 @@ func nativeTestEncryptedJWK(t *testing.T, keyID string, key, iv, plaintext []byt
 		Data:        message.Data,
 	}
 }
+
+func TestNativeUnlockedKeysetsHandlesOutOfOrderKeysets(t *testing.T) {
+	sessionKey := []byte("12345678901234567890123456789012")
+	muk := []byte("abcdefghijklmnopqrstuvwx12345678")
+	parentKeysetID := "abcdefghijklmnopqrstuvwx12"
+	parentKeysetKey := []byte("23456789012345678901234567890123")
+	childKeysetID := "abcdefghijklmnopqrstuvwx34"
+	childKeysetKey := []byte("34567890123456789012345678901234")
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		// The child keyset (encrypted by the parent) is listed first.
+		response, err := nativeSealSessionPayload("session-id", sessionKey, []byte("123456789012"), []byte(`{"keysets":[`+
+			string(nativeTestKeysetJSON(t, childKeysetID, parentKeysetID, parentKeysetKey, childKeysetKey))+`,`+
+			string(nativeTestKeysetJSON(t, parentKeysetID, "mp", muk, parentKeysetKey))+`]}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			t.Fatal(err)
+		}
+	}))
+	defer server.Close()
+
+	client := nativeHTTPTestClient(t, server, sessionKey)
+	client.keys = serviceAccountKeyMaterial{MUK: muk}
+	keys, err := client.unlockedKeysets(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 3 {
+		t.Fatalf("got %d keys, want 3", len(keys))
+	}
+	if _, ok := keys[childKeysetID]; !ok {
+		t.Fatalf("child keyset was not unlocked: %+v", keys)
+	}
+
+	// A second call is served from the session cache.
+	if _, err := client.unlockedKeysets(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 {
+		t.Fatalf("got %d keyset fetches, want 1", requests)
+	}
+}

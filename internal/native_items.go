@@ -795,13 +795,6 @@ func nativeItemPath(vaultID, itemID string) string {
 }
 
 func (c *nativeClient) decodeItemOverviews(ctx context.Context, vaultID string, raw json.RawMessage) ([]nativeItemOverview, error) {
-	var plain []nativeItemOverview
-	if err := json.Unmarshal(raw, &plain); err == nil {
-		if len(plain) == 0 || plain[0].ID != "" {
-			return plain, nil
-		}
-	}
-
 	encryptedItems, err := nativeEncryptedItems(raw)
 	if err != nil {
 		return nil, err
@@ -810,6 +803,21 @@ func (c *nativeClient) decodeItemOverviews(ctx context.Context, vaultID string, 
 	if err != nil {
 		return nil, err
 	}
+	items, err := nativeDecryptItemOverviews(encryptedItems, vaultID, vaultKeys)
+	if err == nil {
+		return items, nil
+	}
+	if !isNativeVaultKeyNotFound(err) {
+		return nil, err
+	}
+	vaultKeys, err = c.refreshUnlockedVaultKeys(ctx, vaultID)
+	if err != nil {
+		return nil, err
+	}
+	return nativeDecryptItemOverviews(encryptedItems, vaultID, vaultKeys)
+}
+
+func nativeDecryptItemOverviews(encryptedItems []nativeEncryptedItemData, vaultID string, vaultKeys map[int]nativeSymmetricKey) ([]nativeItemOverview, error) {
 	items := make([]nativeItemOverview, 0, len(encryptedItems))
 	for _, encrypted := range encryptedItems {
 		overview, err := encrypted.decryptOverview(vaultID, vaultKeys)
@@ -822,12 +830,6 @@ func (c *nativeClient) decodeItemOverviews(ctx context.Context, vaultID string, 
 }
 
 func (c *nativeClient) decodeItem(ctx context.Context, vaultID string, raw json.RawMessage) (nativeItemResponse, error) {
-	var plain nativeItemResponse
-	if err := json.Unmarshal(raw, &plain); err == nil && plain.ID != "" {
-		plain.Category = nativeItemCategory(plain.Category)
-		return plain, nil
-	}
-
 	var wrapped nativeEncryptedItemDetailsResponse
 	if err := json.Unmarshal(raw, &wrapped); err != nil || wrapped.Item.UUID == "" {
 		var encrypted nativeEncryptedItemData
@@ -837,6 +839,17 @@ func (c *nativeClient) decodeItem(ctx context.Context, vaultID string, raw json.
 		wrapped.Item = encrypted
 	}
 	vaultKeys, err := c.unlockedVaultKeys(ctx, vaultID)
+	if err != nil {
+		return nativeItemResponse{}, err
+	}
+	item, err := wrapped.Item.decryptItem(vaultID, vaultKeys)
+	if err == nil {
+		return item, nil
+	}
+	if !isNativeVaultKeyNotFound(err) {
+		return nativeItemResponse{}, err
+	}
+	vaultKeys, err = c.refreshUnlockedVaultKeys(ctx, vaultID)
 	if err != nil {
 		return nativeItemResponse{}, err
 	}
@@ -911,14 +924,37 @@ func nativeVaultKeyForItem(item nativeEncryptedItemData, vaultKeys map[int]nativ
 		if key, ok := vaultKeys[item.VaultKeySN]; ok {
 			return key, nil
 		}
-		return nativeSymmetricKey{}, fmt.Errorf("vault key serial %d was not found", item.VaultKeySN)
+		return nativeSymmetricKey{}, nativeVaultKeyNotFoundError{message: fmt.Sprintf("vault key serial %d was not found", item.VaultKeySN)}
 	}
 	for _, key := range vaultKeys {
 		if key.ID == item.EncryptedBy || key.ID == item.EncOverview.KeyID || key.ID == item.EncDetails.KeyID {
 			return key, nil
 		}
 	}
-	return nativeSymmetricKey{}, fmt.Errorf("vault key for encrypted item %q was not found", item.UUID)
+	return nativeSymmetricKey{}, nativeVaultKeyNotFoundError{message: fmt.Sprintf("vault key for encrypted item %q was not found", item.UUID)}
+}
+
+type nativeVaultKeyNotFoundError struct {
+	message string
+}
+
+func (e nativeVaultKeyNotFoundError) Error() string {
+	return e.message
+}
+
+func isNativeVaultKeyNotFound(err error) bool {
+	var target nativeVaultKeyNotFoundError
+	return errors.As(err, &target)
+}
+
+func (c *nativeClient) refreshUnlockedVaultKeys(ctx context.Context, vaultID string) (map[int]nativeSymmetricKey, error) {
+	c.mu.Lock()
+	c.keysetCache = nil
+	if c.vaultKeyCache != nil {
+		delete(c.vaultKeyCache, vaultID)
+	}
+	c.mu.Unlock()
+	return c.unlockedVaultKeys(ctx, vaultID)
 }
 
 func nativeItemStateFromTrashed(trashed string) string {
@@ -1172,14 +1208,11 @@ func nativeItemVersion(raw json.RawMessage) uint32 {
 
 func randomNativeObjectID() (string, error) {
 	const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	var b [26]byte
-	if _, err := io.ReadFull(rand.Reader, b[:]); err != nil {
+	id, err := RandomString(alphabet, 26)
+	if err != nil {
 		return "", fmt.Errorf("generate item id: %w", err)
 	}
-	for i, value := range b {
-		b[i] = alphabet[int(value)%len(alphabet)]
-	}
-	return string(b[:]), nil
+	return id, nil
 }
 
 func (c *nativeClient) deleteItem(ctx context.Context, request nativeVaultItemParams) ([]byte, error) {

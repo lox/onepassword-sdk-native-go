@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -119,7 +120,7 @@ func nativeSecretResolveAllRequest(params map[string]interface{}) (nativeSecretR
 }
 
 func parseNativeSecretReference(secretReference string) (nativeSecretReference, error) {
-	if err := validateSecretReference(secretReference); err != nil {
+	if err := ValidateSecretReference(secretReference); err != nil {
 		return nativeSecretReference{}, err
 	}
 
@@ -162,18 +163,18 @@ func nativeSecretValueFromItem(item nativeItemResponse, ref nativeSecretReferenc
 	}
 	switch len(matches) {
 	case 0:
-		return "", fmt.Errorf("field not found")
+		return "", errNativeResolveMsg("fieldNotFound", "field not found")
 	case 1:
 		return nativeSecretValueFromField(matches[0], ref)
 	default:
-		return "", fmt.Errorf("too many matching fields")
+		return "", errNativeResolveMsg("tooManyMatchingFields", "too many matching fields")
 	}
 }
 
 func nativeSecretMatchingFields(item nativeItemResponse, ref nativeSecretReference) ([]nativeItemField, error) {
 	var fields []nativeItemField
 	if len(item.Fields) == 0 {
-		return nil, fmt.Errorf("field not found")
+		return nil, errNativeResolveMsg("fieldNotFound", "field not found")
 	}
 	if err := json.Unmarshal(item.Fields, &fields); err != nil {
 		return nil, fmt.Errorf("decode item fields: %w", err)
@@ -184,7 +185,7 @@ func nativeSecretMatchingFields(item nativeItemResponse, ref nativeSecretReferen
 		var ok bool
 		sectionID, ok = nativeItemSectionID(item, ref.Section)
 		if !ok {
-			return nil, fmt.Errorf("section not found")
+			return nil, errNativeResolveMsg("noMatchingSections", "section not found")
 		}
 	}
 
@@ -364,31 +365,35 @@ func (c *nativeClient) resolveItem(ctx context.Context, vaultID, itemRef string)
 	}
 }
 
-type nativeResolveErr string
+type nativeResolveErr struct {
+	kind    string
+	message string
+}
 
 func errNativeResolve(kind string) error {
-	return nativeResolveErr(kind)
+	return nativeResolveErr{kind: kind}
+}
+
+// errNativeResolveMsg attaches a human-readable message alongside the
+// machine-readable kind, so classification never depends on message text.
+func errNativeResolveMsg(kind, message string) error {
+	return nativeResolveErr{kind: kind, message: message}
 }
 
 func (e nativeResolveErr) Error() string {
-	return string(e)
+	if e.message != "" {
+		return e.message
+	}
+	return e.kind
 }
 
 func nativeResolveErrorFromError(err error) *nativeResolveError {
 	if err == nil {
 		return nil
 	}
-	if kind, ok := err.(nativeResolveErr); ok {
-		return &nativeResolveError{Type: string(kind)}
+	var resolveErr nativeResolveErr
+	if errors.As(err, &resolveErr) {
+		return &nativeResolveError{Type: resolveErr.kind}
 	}
-	switch err.Error() {
-	case "field not found":
-		return &nativeResolveError{Type: "fieldNotFound"}
-	case "too many matching fields":
-		return &nativeResolveError{Type: "tooManyMatchingFields"}
-	case "section not found":
-		return &nativeResolveError{Type: "noMatchingSections"}
-	default:
-		return &nativeResolveError{Type: "other", Message: err.Error()}
-	}
+	return &nativeResolveError{Type: "other", Message: err.Error()}
 }

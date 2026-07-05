@@ -155,6 +155,13 @@ func nativeSymmetricKeyFromJWK(data []byte) (nativeSymmetricKey, error) {
 }
 
 func (c *nativeClient) unlockedKeysets(ctx context.Context) (map[string]nativeSymmetricKey, error) {
+	c.mu.Lock()
+	cached := c.keysetCache
+	c.mu.Unlock()
+	if cached != nil {
+		return cached, nil
+	}
+
 	response, err := c.getKeysets(ctx)
 	if err != nil {
 		return nil, err
@@ -162,28 +169,50 @@ func (c *nativeClient) unlockedKeysets(ctx context.Context) (map[string]nativeSy
 	keys := map[string]nativeSymmetricKey{
 		"mp": {ID: "mp", Key: c.keys.MUK},
 	}
-	for _, keyset := range response.Keysets {
-		unlockingKey, ok := keys[keyset.EncryptedBy]
-		if !ok {
-			return nil, fmt.Errorf("keyset %q is encrypted by unknown key %q", keyset.UUID, keyset.EncryptedBy)
+	// Keysets may reference each other in any order, so keep passing over the
+	// pending set until no further keyset can be unlocked.
+	pending := response.Keysets
+	for len(pending) > 0 {
+		var deferred []nativeKeyset
+		for _, keyset := range pending {
+			unlockingKey, ok := keys[keyset.EncryptedBy]
+			if !ok {
+				deferred = append(deferred, keyset)
+				continue
+			}
+			plaintext, err := unlockingKey.decryptJWK(keyset.EncSymKey)
+			if err != nil {
+				return nil, err
+			}
+			key, err := nativeSymmetricKeyFromJWK(plaintext)
+			if err != nil {
+				return nil, err
+			}
+			if key.ID != keyset.UUID {
+				return nil, fmt.Errorf("keyset %q decrypted to key %q", keyset.UUID, key.ID)
+			}
+			keys[key.ID] = key
 		}
-		plaintext, err := unlockingKey.decryptJWK(keyset.EncSymKey)
-		if err != nil {
-			return nil, err
+		if len(deferred) == len(pending) {
+			return nil, fmt.Errorf("keyset %q is encrypted by unknown key %q", deferred[0].UUID, deferred[0].EncryptedBy)
 		}
-		key, err := nativeSymmetricKeyFromJWK(plaintext)
-		if err != nil {
-			return nil, err
-		}
-		if key.ID != keyset.UUID {
-			return nil, fmt.Errorf("keyset %q decrypted to key %q", keyset.UUID, key.ID)
-		}
-		keys[key.ID] = key
+		pending = deferred
 	}
+
+	c.mu.Lock()
+	c.keysetCache = keys
+	c.mu.Unlock()
 	return keys, nil
 }
 
 func (c *nativeClient) unlockedVaultKeys(ctx context.Context, vaultID string) (map[int]nativeSymmetricKey, error) {
+	c.mu.Lock()
+	cached := c.vaultKeyCache[vaultID]
+	c.mu.Unlock()
+	if cached != nil {
+		return cached, nil
+	}
+
 	keysets, err := c.unlockedKeysets(ctx)
 	if err != nil {
 		return nil, err
@@ -214,6 +243,13 @@ func (c *nativeClient) unlockedVaultKeys(ctx context.Context, vaultID string) (m
 	if len(vaultKeys) == 0 {
 		return nil, fmt.Errorf("no vault keys found for %q", vaultID)
 	}
+
+	c.mu.Lock()
+	if c.vaultKeyCache == nil {
+		c.vaultKeyCache = map[string]map[int]nativeSymmetricKey{}
+	}
+	c.vaultKeyCache[vaultID] = vaultKeys
+	c.mu.Unlock()
 	return vaultKeys, nil
 }
 

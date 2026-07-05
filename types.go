@@ -232,6 +232,9 @@ func (i *ItemFieldDetails) UnmarshalJSON(data []byte) error {
 		i.content = &res
 
 	}
+	if len(enum.Content) == 0 {
+		return nil
+	}
 	if err := json.Unmarshal(enum.Content, &i.content); err != nil {
 		return err
 	}
@@ -254,11 +257,17 @@ func (i ItemFieldDetails) OTP() *OTPFieldDetails {
 	return res
 }
 func (i ItemFieldDetails) SSHKey() *SSHKeyAttributes {
-	res, _ := i.content.(**SSHKeyAttributes)
+	res, ok := i.content.(**SSHKeyAttributes)
+	if !ok || res == nil {
+		return nil
+	}
 	return *res
 }
 func (i ItemFieldDetails) Address() *AddressFieldDetails {
-	res, _ := i.content.(**AddressFieldDetails)
+	res, ok := i.content.(**AddressFieldDetails)
+	if !ok || res == nil {
+		return nil
+	}
 	return *res
 }
 
@@ -539,6 +548,9 @@ func (v *ValidRecipient) UnmarshalJSON(data []byte) error {
 		v.parameters = &res
 
 	}
+	if len(enum.Content) == 0 {
+		return nil
+	}
 	if err := json.Unmarshal(enum.Content, &v.parameters); err != nil {
 		return err
 	}
@@ -645,6 +657,9 @@ func (i *ItemUpdateFailureReason) UnmarshalJSON(data []byte) error {
 		i.message = &res
 
 	}
+	if len(enum.Content) == 0 {
+		return nil
+	}
 	if err := json.Unmarshal(enum.Content, &i.message); err != nil {
 		return err
 	}
@@ -663,11 +678,17 @@ func (i ItemUpdateFailureReason) MarshalJSON() ([]byte, error) {
 }
 
 func (i ItemUpdateFailureReason) ItemValidationError() ErrorMessage {
-	res, _ := i.message.(*ErrorMessage)
+	res, ok := i.message.(*ErrorMessage)
+	if !ok || res == nil {
+		return ""
+	}
 	return *res
 }
 func (i ItemUpdateFailureReason) Internal() ErrorMessage {
-	res, _ := i.message.(*ErrorMessage)
+	res, ok := i.message.(*ErrorMessage)
+	if !ok || res == nil {
+		return ""
+	}
 	return *res
 }
 
@@ -742,6 +763,9 @@ func (i *ItemsGetAllError) UnmarshalJSON(data []byte) error {
 		i.message = &res
 
 	}
+	if len(enum.Content) == 0 {
+		return nil
+	}
 	if err := json.Unmarshal(enum.Content, &i.message); err != nil {
 		return err
 	}
@@ -760,7 +784,10 @@ func (i ItemsGetAllError) MarshalJSON() ([]byte, error) {
 }
 
 func (i ItemsGetAllError) Internal() ErrorMessage {
-	res, _ := i.message.(*ErrorMessage)
+	res, ok := i.message.(*ErrorMessage)
+	if !ok || res == nil {
+		return ""
+	}
 	return *res
 }
 
@@ -884,6 +911,9 @@ func (r *ResolveReferenceError) UnmarshalJSON(data []byte) error {
 		return nil
 
 	}
+	if len(enum.Content) == 0 {
+		return nil
+	}
 	if err := json.Unmarshal(enum.Content, &r.message); err != nil {
 		return err
 	}
@@ -902,11 +932,17 @@ func (r ResolveReferenceError) MarshalJSON() ([]byte, error) {
 }
 
 func (r ResolveReferenceError) Parsing() ErrorMessage {
-	res, _ := r.message.(*ErrorMessage)
+	res, ok := r.message.(*ErrorMessage)
+	if !ok || res == nil {
+		return ""
+	}
 	return *res
 }
 func (r ResolveReferenceError) UnableToGenerateTOTPCode() ErrorMessage {
-	res, _ := r.message.(*ErrorMessage)
+	res, ok := r.message.(*ErrorMessage)
+	if !ok || res == nil {
+		return ""
+	}
 	return *res
 }
 
@@ -1109,6 +1145,9 @@ func (i *ItemListFilter) UnmarshalJSON(data []byte) error {
 		i.content = &res
 
 	}
+	if len(enum.Content) == 0 {
+		return nil
+	}
 	if err := json.Unmarshal(enum.Content, &i.content); err != nil {
 		return err
 	}
@@ -1199,6 +1238,9 @@ func (p *PasswordRecipe) UnmarshalJSON(data []byte) error {
 		var res PasswordRecipeRandomInner
 		p.parameters = &res
 
+	}
+	if len(enum.Content) == 0 {
+		return nil
 	}
 	if err := json.Unmarshal(enum.Content, &p.parameters); err != nil {
 		return err

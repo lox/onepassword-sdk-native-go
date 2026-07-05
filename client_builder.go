@@ -60,9 +60,10 @@ func initClient(ctx context.Context, core internal.CoreWrapper, client Client) (
 
 	initAPIs(&client, inner)
 
-	runtime.SetFinalizer(&client, func(f *Client) {
-		releaseInnerClient(inner)
-	})
+	// The finalizer is set on the InnerClient rather than the Client: sub-API
+	// values hold only the InnerClient, so a finalizer on the Client could
+	// release the core client while those handles are still live.
+	runtime.SetFinalizer(inner, releaseInnerClient)
 	return &client, nil
 }
 
@@ -112,7 +113,7 @@ func clientInvoke(ctx context.Context, innerClient *internal.InnerClient, invoca
 			var clientID *uint64
 			clientID, err = innerClient.Core.InitClient(ctx, innerClient.Config)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("error initializing client: %w", unmarshalError(err.Error()))
 			}
 			innerClient.Core.ReleaseClient(innerClient.ID)
 			innerClient.ID = *clientID
@@ -128,6 +129,7 @@ func clientInvoke(ctx context.Context, innerClient *internal.InnerClient, invoca
 			if err == nil {
 				return invocationResponse, nil
 			}
+			err = unmarshalError(err.Error())
 		}
 
 		return nil, err

@@ -3,8 +3,6 @@ package internal
 import (
 	"context"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 )
 
@@ -229,27 +227,20 @@ func TestNativeResolveSecretUsesReadRoutes(t *testing.T) {
 
 func TestNativeResolveSecretWithIDsSkipsLists(t *testing.T) {
 	sessionKey := []byte("12345678901234567890123456789012")
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got, want := r.URL.String(), "/api/v1/vault/abcdefghijklmnopqrstuvwx12/item/abcdefghijklmnopqrstuvwx34"; got != want {
-			t.Fatalf("got path %q, want %q", got, want)
-		}
-		response, err := nativeSealSessionPayload("session-id", sessionKey, []byte("123456789012"), []byte(`{
-			"id":"abcdefghijklmnopqrstuvwx34",
-			"title":"keyring",
-			"category":"API_CREDENTIAL",
-			"vaultId":"abcdefghijklmnopqrstuvwx12",
-			"fields":[{"id":"credential","title":"credential","value":"dmFsdWU="}]
-		}`))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := json.NewEncoder(w).Encode(response); err != nil {
-			t.Fatal(err)
-		}
-	}))
+	muk := []byte("abcdefghijklmnopqrstuvwx12345678")
+	keysetID := "abcdefghijklmnopqrstuvwx90"
+	keysetKey := []byte("23456789012345678901234567890123")
+	vaultID := "abcdefghijklmnopqrstuvwx12"
+	vaultKey := []byte("34567890123456789012345678901234")
+	// Only the single-item route (plus key material) is served: hitting a
+	// vault or item list route fails the test.
+	server := nativeEncryptedItemServer(t, sessionKey, muk, keysetID, keysetKey, vaultID, vaultKey, map[string][]byte{
+		"/api/v1/vault/abcdefghijklmnopqrstuvwx12/item/abcdefghijklmnopqrstuvwx34": nativeSecretTestEncryptedItemJSON(t, vaultID, vaultKey),
+	})
 	defer server.Close()
 
 	client := nativeHTTPTestClient(t, server, sessionKey)
+	client.keys = serviceAccountKeyMaterial{MUK: muk}
 	response, err := client.resolveSecret(context.Background(), nativeSecretResolveParams{
 		SecretReference: "op://abcdefghijklmnopqrstuvwx12/abcdefghijklmnopqrstuvwx34/credential",
 		Reference: nativeSecretReference{
@@ -334,41 +325,55 @@ func TestNativeResolveSecretsPreservesTOTPErrorTypes(t *testing.T) {
 func nativeSecretResolveTestClient(t *testing.T) (*nativeClient, func()) {
 	t.Helper()
 	sessionKey := []byte("12345678901234567890123456789012")
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var plaintext string
-		switch r.URL.String() {
-		case "/api/v1/vaults":
-			plaintext = `[{"id":"abcdefghijklmnopqrstuvwx12","title":"Private"}]`
-		case "/api/v1/vault/abcdefghijklmnopqrstuvwx12/items/overviews":
-			plaintext = `[{"id":"abcdefghijklmnopqrstuvwx34","title":"keyring","category":"API_CREDENTIAL","vaultId":"abcdefghijklmnopqrstuvwx12","state":"active"}]`
-		case "/api/v1/vault/abcdefghijklmnopqrstuvwx12/item/abcdefghijklmnopqrstuvwx34":
-			plaintext = `{
-				"id":"abcdefghijklmnopqrstuvwx34",
-				"title":"keyring",
-				"category":"API_CREDENTIAL",
-				"vaultId":"abcdefghijklmnopqrstuvwx12",
-				"fields":[
-					{"id":"username","title":"username","value":"key"},
-					{"id":"credential","title":"credential","value":"dmFsdWU="},
-					{
-						"id":"otp",
-						"title":"one-time password",
-						"fieldType":"Totp",
-						"value":"otpauth://example",
-						"details":{"type":"Otp","content":{"code":"123456"}}
-					}
-				]
-			}`
-		default:
-			t.Fatalf("unexpected path %q", r.URL.String())
-		}
-		response, err := nativeSealSessionPayload("session-id", sessionKey, []byte("123456789012"), []byte(plaintext))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := json.NewEncoder(w).Encode(response); err != nil {
-			t.Fatal(err)
-		}
-	}))
-	return nativeHTTPTestClient(t, server, sessionKey), server.Close
+	muk := []byte("abcdefghijklmnopqrstuvwx12345678")
+	keysetID := "abcdefghijklmnopqrstuvwx90"
+	keysetKey := []byte("23456789012345678901234567890123")
+	vaultID := "abcdefghijklmnopqrstuvwx12"
+	vaultKey := []byte("34567890123456789012345678901234")
+	item := nativeSecretTestEncryptedItemJSON(t, vaultID, vaultKey)
+	server := nativeEncryptedItemServer(t, sessionKey, muk, keysetID, keysetKey, vaultID, vaultKey, map[string][]byte{
+		"/api/v1/vaults": []byte(`[{"id":"` + vaultID + `","title":"Private"}]`),
+		"/api/v1/vault/" + vaultID + "/items/overviews":                 []byte(`[` + string(item) + `]`),
+		"/api/v1/vault/" + vaultID + "/item/abcdefghijklmnopqrstuvwx34": item,
+	})
+	client := nativeHTTPTestClient(t, server, sessionKey)
+	client.keys = serviceAccountKeyMaterial{MUK: muk}
+	return client, server.Close
+}
+
+func nativeSecretTestEncryptedItemJSON(t *testing.T, vaultID string, vaultKey []byte) []byte {
+	t.Helper()
+	item := nativeEncryptedItemData{
+		UUID:        "abcdefghijklmnopqrstuvwx34",
+		Type:        "API_CREDENTIAL",
+		ItemVersion: 2,
+		EncryptedBy: vaultID,
+		VaultKeySN:  1,
+		CreatedAt:   json.RawMessage(`"2026-07-04T00:00:00Z"`),
+		UpdatedAt:   json.RawMessage(`"2026-07-04T01:00:00Z"`),
+		EncOverview: nativeTestEncryptedJWK(t, vaultID, vaultKey, []byte("345678901234"), []byte(`{
+			"title":"keyring",
+			"category":"API_CREDENTIAL",
+			"state":"active"
+		}`)),
+		EncDetails: nativeTestEncryptedJWK(t, vaultID, vaultKey, []byte("456789012345"), []byte(`{
+			"fields":[
+				{"id":"username","title":"username","fieldType":"Text","value":"key"},
+				{"id":"credential","title":"credential","fieldType":"Concealed","value":"dmFsdWU="},
+				{
+					"id":"otp",
+					"title":"one-time password",
+					"fieldType":"Totp",
+					"value":"otpauth://example",
+					"details":{"type":"Otp","content":{"code":"123456"}}
+				}
+			],
+			"sections":[]
+		}`)),
+	}
+	body, err := json.Marshal(item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
 }

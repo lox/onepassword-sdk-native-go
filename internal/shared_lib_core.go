@@ -1,4 +1,4 @@
-//go:build cgo || windows
+//go:build (cgo && (darwin || linux)) || windows
 
 package internal
 

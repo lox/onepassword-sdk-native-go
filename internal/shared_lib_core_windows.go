@@ -54,20 +54,17 @@ func (slc *SharedLibCore) callSharedLibrary(input []byte) ([]byte, error) {
 	var outLen uintptr
 	var outCap uintptr
 
-	r1, _, callErr := slc.procSend.Call(
+	// Proc.Call always returns a non-nil error wrapping GetLastError, which can
+	// be a stale value from an unrelated Win32 call; only the library-level
+	// return code in r1 indicates whether the call failed.
+	r1, _, _ := slc.procSend.Call(
 		uintptr(unsafe.Pointer(&input[0])),
 		uintptr(len(input)),
 		uintptr(unsafe.Pointer(&outBuf)),
 		uintptr(unsafe.Pointer(&outLen)),
 		uintptr(unsafe.Pointer(&outCap)),
 	)
-	// syscall layer error
-	if callErr != syscall.Errno(0) {
-		return nil, callErr
-	}
-	// library-level return code
-	err := errorFromReturnCode(int32(r1))
-	if err != nil {
+	if err := errorFromReturnCode(int32(r1)); err != nil {
 		return nil, err
 	}
 
@@ -85,7 +82,7 @@ func (slc *SharedLibCore) callSharedLibrary(input []byte) ([]byte, error) {
 
 	// Match Unix: decode envelope and return payload or error
 	var response Response
-	if err = json.Unmarshal(out, &response); err != nil {
+	if err := json.Unmarshal(out, &response); err != nil {
 		return nil, err
 	}
 	if response.Success {
