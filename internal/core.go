@@ -8,6 +8,7 @@ import (
 	"log"
 	"runtime"
 	"sync"
+	"strings"
 )
 
 const (
@@ -99,7 +100,7 @@ func NewDefaultConfig() ClientConfig {
 	const defaultOSVersion = "0.0.0"
 	return ClientConfig{
 		Language:              SDKLanguage,
-		SDKVersion:            SDKSemverVersion,
+		SDKVersion:            strings.TrimSpace(SDKSemverVersion),
 		RequestLibraryName:    DefaultRequestLibrary,
 		RequestLibraryVersion: runtime.Version(),
 		SystemOS:              runtime.GOOS,
